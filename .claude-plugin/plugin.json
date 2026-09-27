@@ -69,6 +69,12 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Scorer URL",
+      "description": "HTTP(S) endpoint that accepts the Jev request body and returns Jev-shaped answers. Leave unset for TypeSafe Jev; set to point the hook at an independent scorer serving the same protocol.",
+      "default": ""
     }
   }
 }

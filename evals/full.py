@@ -16,7 +16,11 @@ import tomllib
 
 from evals.auth import AUTH_OVERRIDES, subscription_mounts
 from evals.sources import (
+    DEFAULT_ARMS,
     PRODUCTION,
+    arm_options,
+    arms,
+    control_arm,
     plugin_options,
     production_provenance,
     production_root,
@@ -175,8 +179,10 @@ def failure_category(row: dict) -> str | None:
 
 
 def aggregate(rows: list[dict]) -> dict:
-    arms = {}
-    for arm in ("control", "plugin"):
+    summary = {}
+    names = arm_names()
+    control_name = control_arm()
+    for arm in names:
         group = [row for row in rows if row["arm"] == arm]
         finished = [row for row in group if row["state"] == "finished"]
         measured = [
@@ -188,7 +194,7 @@ def aggregate(rows: list[dict]) -> dict:
                 for key, value in (usage or {}).items():
                     if isinstance(value, (int, float)) and not isinstance(value, bool):
                         jev_usage[key] = jev_usage.get(key, 0) + value
-        arms[arm] = {
+        summary[arm] = {
             "planned": len(group),
             "finished": len(finished),
             "resource_blocked": sum(
@@ -239,28 +245,39 @@ def aggregate(rows: list[dict]) -> dict:
             for row in rows
             if row["task"] == task and row.get("repetition", 1) == repetition
         }
-        control, plugin = by_arm["control"], by_arm["plugin"]
-        complete = all(row.get("reward") is not None for row in (control, plugin))
-        pairs.append(
-            {
-                "task": task,
-                "repetition": repetition,
-                "both_rewards_available": complete,
-                "control_state": control["state"],
-                "plugin_state": plugin["state"],
-                "control_reward": control.get("reward"),
-                "plugin_reward": plugin.get("reward"),
-                "disagreement": control.get("reward") != plugin.get("reward")
-                if complete
-                else None,
-            }
-        )
+        control = by_arm[control_name]
+        for name in names:
+            if name == control_name:
+                continue
+            plugin = by_arm[name]
+            complete = all(row.get("reward") is not None for row in (control, plugin))
+            pairs.append(
+                {
+                    "task": task,
+                    "repetition": repetition,
+                    **({"arm": name} if len(names) > 2 else {}),
+                    "both_rewards_available": complete,
+                    "control_state": control["state"],
+                    "plugin_state": plugin["state"],
+                    "control_reward": control.get("reward"),
+                    "plugin_reward": plugin.get("reward"),
+                    "disagreement": control.get("reward") != plugin.get("reward")
+                    if complete
+                    else None,
+                }
+            )
     return {
         "trials": rows,
         "pairs": pairs,
-        "aggregate": arms,
+        "aggregate": summary,
+        "arms": {name: arm_options(name) for name in names},
+        "control_arm": control_name,
         "expected_trials": len(rows),
     }
+
+
+def arm_names() -> list[str]:
+    return list(arms())
 
 
 def checkpoint(root: Path, rows: list[dict]) -> None:
@@ -359,6 +376,10 @@ def continuation_rows(
     previous = json.loads((root / "execution-provenance.json").read_text())
     if previous.get("plugin_options", {}) != plugin_options():
         raise ValueError("Cannot resume with different plugin options")
+    if previous.get("arms", {name: arm_options(name) for name in DEFAULT_ARMS}) != {
+        name: arm_options(name) for name in arm_names()
+    }:
+        raise ValueError("Cannot resume with different arms")
     if previous["flags"] != flags:
         raise ValueError("Cannot resume with different trial flags")
     production = (".claude-plugin/", "hooks/", "src/")
@@ -413,7 +434,8 @@ def validate_manifest(
     manifest: list[dict], task_count: int = 89, repetitions: int = 1
 ) -> None:
     tasks = {row["task"] for row in manifest}
-    count = task_count * repetitions * 2
+    names = arm_names()
+    count = task_count * repetitions * len(names)
     if (
         repetitions < 1
         or task_count < 1
@@ -424,11 +446,11 @@ def validate_manifest(
     if {(row["task"], row["arm"], row.get("repetition", 1)) for row in manifest} != {
         (task, arm, repetition)
         for task in tasks
-        for arm in ("control", "plugin")
+        for arm in names
         for repetition in range(1, repetitions + 1)
     }:
         raise ValueError(
-            "Each task repetition must have exactly one control and one plugin arm"
+            f"Each task repetition must have exactly one trial per arm {names}"
         )
     if len({row["job_name"] for row in manifest}) != len(manifest):
         raise ValueError("Each trial must have a unique job_name")
@@ -505,6 +527,8 @@ def run(
         ),
         "auth_mode": "subscription",
         "plugin_options": plugin_options(),
+        "arms": {name: arm_options(name) for name in arm_names()},
+        "control_arm": control_arm(),
         "api_overrides_present_in_launcher": sorted(set(AUTH_OVERRIDES) & set(env)),
         "concurrency": concurrency,
         "task_count": task_count,
