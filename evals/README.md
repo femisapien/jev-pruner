@@ -34,6 +34,20 @@ Both the smoke and Harbor adapter pass these through the inline plugin's
 `pluginConfigs` entry. Full-run provenance records the options and refuses a
 resume with different options.
 
+## Multiple plugin arms (independent scorers)
+
+By default a run pairs `control` (no plugin) with `plugin` (Jev). To compare
+several scorers against the same native control, point `JEV_EVAL_ARMS` at a JSON
+file mapping arm names to `null` (exactly one native control) or to
+`{"options": {...}, "env": {...}}`. `options` are merged over the env-derived
+plugin options above and passed through `pluginConfigs`; `env` entries whose
+value starts with `$` are read from the launcher environment and exported into
+the agent container. `evals/arms/pruner-cohort.json` declares Jev plus the
+independent `pruner-model` checkpoints served at their Jev-compatible
+`baseUrl`, each authenticated with `PRUNER_SERVE_TOKEN`. Manifests must then
+contain one trial per arm for each task repetition; `results.json` pairs every
+non-control arm with the control and records the arm declaration.
+
 The summarizer joins decisions to the final Claude transcript by tool-use ID.
 It separates complete source size, hook stdout size, the host's native
 model-visible text before pruning, and final model-visible text after pruning.

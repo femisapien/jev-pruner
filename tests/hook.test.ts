@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getApiKey, looksSecret, resolveHookConfig } from '../hooks/fast-jev-output.ts';
+import { getApiKey, jevAsker, looksSecret, resolveHookConfig } from '../hooks/fast-jev-output.ts';
 
 describe('hook configuration', () => {
   it('uses the documented defaults', () => {
@@ -36,6 +36,37 @@ describe('hook configuration', () => {
       maxStateTokens: 5_000,
       model: 'jev-custom',
     });
+  });
+
+  it('routes scoring to an alternative scorer only for http(s) URLs', () => {
+    expect(resolveHookConfig({ baseUrl: 'https://scorer.example/v1/systemone' }).baseUrl).toBe(
+      'https://scorer.example/v1/systemone',
+    );
+    expect(resolveHookConfig({ baseUrl: 'file:///etc/passwd' }).baseUrl).toBeUndefined();
+    expect(resolveHookConfig({}).baseUrl).toBeUndefined();
+  });
+});
+
+describe('jevAsker', () => {
+  it('posts to the configured scorer URL with the Jev body', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    const asker = jevAsker(
+      async (url, init) => {
+        calls.push({ url, body: JSON.parse(String(init?.body)) });
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({ answers: { c1: { type: 'noul', noul: 0.9 } } }),
+        };
+      },
+      'key',
+      'stage-c-v2-001-e4',
+      'https://scorer.example/v1/systemone',
+    );
+    const state = { task: 't', history: [], command: 'ls', diagnosticsAndResults: [], chunks: [] };
+    await asker.ask(state, { c1: { type: 'noul', instructions: 'i', criteria: { true: 't', false: 'f' } } });
+    expect(calls[0].url).toBe('https://scorer.example/v1/systemone');
+    expect(calls[0].body).toMatchObject({ model: 'stage-c-v2-001-e4', state, questions: { c1: { type: 'noul' } } });
   });
 });
 
