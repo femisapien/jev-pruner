@@ -1,6 +1,5 @@
 {
   "native": null,
-  "jev": {},
   "pruner-v3": {
     "plugin": "$PRUNER_MODEL_PLUGIN_DIR",
     "options": {
@@ -8,6 +7,8 @@
       "model": "stage-c-v3-001-e4",
       "diagnostics": true
     },
-    "env": { "PRUNER_SERVE_TOKEN": "$PRUNER_SERVE_TOKEN" }
+    "env": {
+      "PRUNER_SERVE_TOKEN": "$PRUNER_SERVE_TOKEN"
+    }
   }
 }

@@ -11,7 +11,7 @@ export const register: Register = (on) => {
     return next(event);
   });
   on('http.fetch', async ($, event, next) => {
-    if (event.url !== 'https://api.typesafe.ai/v1/systemone') return next(event);
+    if (!/\/v1\/systemone$/.test(event.url)) return next(event);
     const id = ++requests;
     const started = Date.now();
     await $.fs.write(`${root}/request-${id}-started.json`, JSON.stringify({
