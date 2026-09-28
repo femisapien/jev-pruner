@@ -239,7 +239,7 @@ class JevClaudeCode(ClaudeCode):
             if isinstance(event, dict) and event.get("subtype") == "init":
                 loaded_plugins = {plugin["name"] for plugin in event.get("plugins", [])}
         expected_plugins = {"jev-eval-observer"}
-        if arm() == "plugin":
+        if arm_options(arm()) is not None:
             expected_plugins.add("fast-jev-output")
         if loaded_plugins != expected_plugins:
             raise RuntimeError(f"Unexpected loaded plugins: {loaded_plugins}")
