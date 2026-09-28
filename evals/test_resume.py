@@ -85,7 +85,7 @@ class ContinuationTests(unittest.TestCase):
             "evals.full.summarize_trial", return_value={"reward": 1}
         ) as summarize:
             rows = continuation_rows(self.root, self.manifest, self.flags, self.pin)
-        summarize.assert_called_once_with(trial)
+        summarize.assert_called_once_with(trial, "control")
         self.assertEqual(rows[0]["state"], "finished")
         self.assertTrue(rows[0]["recovered_from_completed_harbor_job"])
         self.assertIsNone(rows[0]["harbor_return_code"])

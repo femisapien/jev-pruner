@@ -319,7 +319,7 @@ def finish_trial(root: Path, row: dict, environment: str) -> str | None:
     reason = trial_blocker(job)
     paths = list(job.glob("*/result.json"))
     if len(paths) == 1:
-        row.update(summarize_trial(paths[0]))
+        row.update(summarize_trial(paths[0], row["arm"]))
         row["failure_category"] = failure_category(row)
         row["state"] = "finished"
     else:
@@ -409,7 +409,7 @@ def continuation_rows(
                 or len(paths) != 1
             ):
                 raise ValueError("Cannot resume an unfinished Harbor trial")
-            row.update(summarize_trial(paths[0]))
+            row.update(summarize_trial(paths[0], row["arm"]))
             row["failure_category"] = failure_category(row)
             row["harbor_return_code"] = None
             row["recovered_from_completed_harbor_job"] = True
@@ -417,7 +417,7 @@ def continuation_rows(
         elif row["state"] == "finished":
             paths = list((root / "jobs" / row["job_name"]).glob("*/result.json"))
             if len(paths) == 1:
-                row.update(summarize_trial(paths[0]))
+                row.update(summarize_trial(paths[0], row["arm"]))
                 row["failure_category"] = failure_category(row)
                 row["resummarized_with_sources"] = pin.get("evals/summarize.py")
         if row["state"] not in {

@@ -367,13 +367,13 @@ def summarize_agent(agent: Path, arm: str, stream: str = "claude-code.txt") -> d
     }
 
 
-def summarize_trial(path: Path) -> dict:
+def summarize_trial(path: Path, arm: str | None = None) -> dict:
     trial = json.loads(path.read_text())
     settings_path = path.parent / "agent/eval-settings.json"
     settings = (
         json.loads(settings_path.read_text())
         if settings_path.exists()
-        else {"arm": path.parent.parent.name.rsplit("-", 1)[-1]}
+        else {"arm": arm or path.parent.parent.name.rsplit("-", 1)[-1]}
     )
     exception = trial.get("exception_info")
     return {
