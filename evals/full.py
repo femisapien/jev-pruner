@@ -414,6 +414,12 @@ def continuation_rows(
             row["harbor_return_code"] = None
             row["recovered_from_completed_harbor_job"] = True
             row["state"] = "finished"
+        elif row["state"] == "finished":
+            paths = list((root / "jobs" / row["job_name"]).glob("*/result.json"))
+            if len(paths) == 1:
+                row.update(summarize_trial(paths[0]))
+                row["failure_category"] = failure_category(row)
+                row["resummarized_with_sources"] = pin.get("evals/summarize.py")
         if row["state"] not in {
             "pending",
             "finished",

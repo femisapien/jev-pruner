@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from statistics import median
 
+from evals.sources import arm_options, control_arm
+
 TRIM_LOG = re.compile(r"kept (\d+)/(\d+) chunks \((\d+)→(\d+) chars\)")
 TRIM_MARKER = re.compile(r"\[fast-jev-output trimmed (\d+) lines \((\d+) chars\)")
 PRUNED_OUTPUT = re.compile(
@@ -216,7 +218,8 @@ def summarize_agent(agent: Path, arm: str, stream: str = "claude-code.txt") -> d
     init = next((e for e in events if e.get("subtype") == "init"), {})
     plugins = sorted(p["name"] for p in init.get("plugins", []))
     expected = sorted(
-        ["jev-eval-observer"] + (["fast-jev-output"] if arm == "plugin" else [])
+        ["jev-eval-observer"]
+        + (["fast-jev-output"] if arm_options(arm) is not None else [])
     )
     issues = []
     if plugins != expected:
@@ -278,7 +281,7 @@ def summarize_agent(agent: Path, arm: str, stream: str = "claude-code.txt") -> d
         issues.append(
             "Jev errors occurred; inspect captures before interpreting savings"
         )
-    if arm == "control" and (started or trims):
+    if arm == control_arm() and (started or trims):
         issues.append("Control unexpectedly invoked pruning")
     bash_records = [
         json.loads(path.read_text()) for path in evidence.glob("bash-*.json")
@@ -404,7 +407,7 @@ def summarize_smoke(path: Path, arm: str) -> dict:
         row["measurement_issues"].append("Smoke model does not match pin")
     if row["bash_calls_observed"] != 1:
         row["measurement_issues"].append("Smoke must execute exactly one Bash call")
-    if arm == "plugin" and not (
+    if arm_options(arm) is not None and not (
         row["jev_responses"] > 0
         and all(status == 200 for status in row["jev_http_statuses"])
         and row["pruned_results_in_transcript"] > 0
