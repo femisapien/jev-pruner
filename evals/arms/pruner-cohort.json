@@ -14,5 +14,12 @@
       "model": "stage-c-v2-001-e4"
     },
     "env": { "TYPESAFE_API_KEY": "$PRUNER_SERVE_TOKEN" }
+  },
+  "pruner-v3-loosened": {
+    "options": {
+      "baseUrl": "https://twerk--pruner-model-jevcompatiblescorer-web.modal.run/v1/systemone",
+      "model": "stage-c-v3-001-e4"
+    },
+    "env": { "TYPESAFE_API_KEY": "$PRUNER_SERVE_TOKEN" }
   }
 }
