@@ -114,3 +114,38 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(rows[0]["voided_attempts"][0]["failure_category"], "account")
         self.assertFalse(job.exists())
         self.assertTrue((self.root / "jobs" / "control.voided-1").exists())
+
+    def test_preflight_and_setup_timeout_failures_are_requeued_once(self) -> None:
+        preflight = {
+            "exception_type": "AgentSetupError",
+            "exception_message": "Command failed (exit 1): node check_auth.cjs\n"
+            "stderr: Expected official Claude subscription login; no inference started.",
+        }
+        timeout = {
+            "exception_type": "AgentSetupTimeoutError",
+            "exception_message": "Agent setup timed out after 360.0 seconds",
+        }
+        self.rows[0].update(reward=None, exception=preflight)
+        self.rows[1].update(
+            state="finished",
+            reward=None,
+            exception=timeout,
+            voided_attempts=[{"job_dir": "plugin.voided-1"}],
+        )
+        self.write("progress.json", self.rows)
+        for name, exception in (("control", preflight), ("plugin", timeout)):
+            trial = self.root / "jobs" / name / "trial"
+            trial.mkdir(parents=True)
+            (trial / "result.json").write_text(
+                json.dumps({"finished_at": "t", "exception_info": exception})
+            )
+        with patch("evals.full.summarize_trial") as summarize:
+            summarize.side_effect = lambda path, arm: {
+                "reward": None,
+                "exception": preflight if arm == "control" else timeout,
+            }
+            rows = continuation_rows(self.root, self.manifest, self.flags, self.pin)
+        self.assertEqual(rows[0]["state"], "pending")
+        self.assertEqual(rows[0]["voided_attempts"][0]["failure_category"], "account")
+        self.assertEqual(rows[1]["state"], "finished")
+        self.assertEqual(rows[1]["failure_category"], "agent_setup")
