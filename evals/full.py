@@ -376,7 +376,7 @@ def continuation_rows(
     previous = json.loads((root / "execution-provenance.json").read_text())
     if previous.get("plugin_options", {}) != plugin_options():
         raise ValueError("Cannot resume with different plugin options")
-    if previous.get("arms", {name: arm_options(name) for name in DEFAULT_ARMS}) != {
+    if previous.get("arms", DEFAULT_ARMS) != {
         name: arm_options(name) for name in arm_names()
     }:
         raise ValueError("Cannot resume with different arms")
