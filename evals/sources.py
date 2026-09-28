@@ -45,8 +45,12 @@ def arms() -> dict[str, dict | None]:
     for name, value in declared.items():
         if value is None:
             continue
-        if not isinstance(value, dict) or set(value) - {"options", "env"}:
-            raise ValueError(f"Arm {name} must be null or an object with options/env")
+        if not isinstance(value, dict) or set(value) - {"options", "env", "plugin"}:
+            raise ValueError(
+                f"Arm {name} must be null or an object with options/env/plugin"
+            )
+        if "plugin" in value and not isinstance(value["plugin"], str):
+            raise TypeError(f"Arm {name} plugin must be an absolute checkout path")
         if not isinstance(value.get("options", {}), dict) or not isinstance(
             value.get("env", {}), dict
         ):
@@ -82,23 +86,61 @@ def arm_env(name: str) -> dict[str, str]:
     return resolved
 
 
-def production_root(repo: Path) -> Path:
-    value = os.environ.get("JEV_EVAL_PLUGIN_DIR")
-    if not value:
-        return repo
+def _checkout(value: str, what: str) -> Path:
     root = Path(value)
     if not root.is_absolute() or not all((root / name).is_dir() for name in PRODUCTION):
-        raise ValueError("JEV_EVAL_PLUGIN_DIR must be an absolute plugin checkout")
+        raise ValueError(f"{what} must be an absolute plugin checkout")
     return root.resolve()
 
 
-def production_provenance(repo: Path) -> dict[str, str]:
-    if not os.environ.get("JEV_EVAL_PLUGIN_DIR"):
-        return {}
-    root = production_root(repo)
-    if subprocess.check_output(["git", "status", "--porcelain"], cwd=root):
-        raise ValueError("Commit production checkout changes before execution")
-    commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
-    return {"production_checkout": str(root), "production_commit": commit}
+def production_root(repo: Path, arm: str | None = None) -> Path:
+    """Plugin checkout for an arm: its ``plugin`` entry, else ``JEV_EVAL_PLUGIN_DIR``, else this repo."""
+    if arm is not None:
+        declared = (arms()[arm] or {}).get("plugin")
+        if isinstance(declared, str) and declared.startswith("$"):
+            if not os.environ.get(declared[1:]):
+                raise ValueError(
+                    f"Arm {arm} needs {declared[1:]} in the launcher environment"
+                )
+            declared = os.environ[declared[1:]]
+        if declared:
+            return _checkout(declared, f"Arm {arm} plugin")
+    value = os.environ.get("JEV_EVAL_PLUGIN_DIR")
+    if not value:
+        return repo
+    return _checkout(value, "JEV_EVAL_PLUGIN_DIR")
+
+
+def plugin_name(root: Path) -> str:
+    """The plugin's manifest name, which Claude reports in the init event and settings key."""
+    manifest = json.loads((root / ".claude-plugin" / "plugin.json").read_text())
+    name = manifest.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"Plugin manifest under {root} has no name")
+    return name
+
+
+def plugin_roots(repo: Path) -> dict[str, Path]:
+    """Distinct plugin checkouts used by the declared non-control arms."""
+    roots: dict[str, Path] = {}
+    for name, value in arms().items():
+        if value is None:
+            continue
+        root = production_root(repo, name)
+        roots.setdefault(str(root), root)
+    return roots
+
+
+def production_provenance(repo: Path) -> dict[str, dict[str, dict[str, str]]]:
+    """Commit of every external plugin checkout in play; the harness repo is pinned elsewhere."""
+    checkouts: dict[str, dict[str, str]] = {}
+    for key, root in plugin_roots(repo).items():
+        if root == repo.resolve():
+            continue
+        if subprocess.check_output(["git", "status", "--porcelain"], cwd=root):
+            raise ValueError(f"Commit production checkout changes under {root} first")
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        checkouts[key] = {"production_commit": commit, "plugin": plugin_name(root)}
+    return {"production_checkouts": checkouts} if checkouts else {}

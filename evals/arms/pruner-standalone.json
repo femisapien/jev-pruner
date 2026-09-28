@@ -1,0 +1,14 @@
+{
+  "native": null,
+  "pruner-v3": {
+    "plugin": "$PRUNER_MODEL_PLUGIN_DIR",
+    "options": {
+      "baseUrl": "https://vrl-inc--pruner-model-jevcompatiblescorer-web.modal.run/v1/systemone",
+      "model": "stage-c-v3-001-e4",
+      "diagnostics": true
+    },
+    "env": {
+      "PRUNER_SERVE_TOKEN": "$PRUNER_SERVE_TOKEN"
+    }
+  }
+}

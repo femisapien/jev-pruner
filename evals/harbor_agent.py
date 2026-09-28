@@ -18,7 +18,14 @@ from evals.auth import (
     prepare_subscription,
     subscription_mounts,
 )
-from evals.sources import PRODUCTION, arm_env, arm_options, arms, production_root
+from evals.sources import (
+    PRODUCTION,
+    arm_env,
+    arm_options,
+    arms,
+    plugin_name,
+    production_root,
+)
 
 CLAUDE_VERSION = "2.1.274"
 REPO = Path(__file__).resolve().parents[1]
@@ -57,10 +64,12 @@ class JevClaudeCode(ClaudeCode):
         )
         if self.parse_version(version.stdout or "") != CLAUDE_VERSION:
             raise RuntimeError("Installed Claude version does not match pin")
-        for directory in PRODUCTION:
-            await environment.upload_dir(
-                production_root(REPO) / directory, f"{REMOTE}/production/{directory}"
-            )
+        if arm_options(arm()) is not None:
+            for directory in PRODUCTION:
+                await environment.upload_dir(
+                    production_root(REPO, arm()) / directory,
+                    f"{REMOTE}/production/{directory}",
+                )
         await environment.upload_dir(REPO / "evals/observer", f"{REMOTE}/observer")
         await environment.upload_file(
             REPO / "evals/check_auth.cjs", f"{REMOTE}/check_auth.cjs"
@@ -161,7 +170,11 @@ class JevClaudeCode(ClaudeCode):
             settings["forceLoginMethod"] = "claudeai"
         options = arm_options(arm())
         if options:
-            settings["pluginConfigs"] = {"fast-jev-output@inline": {"options": options}}
+            settings["pluginConfigs"] = {
+                f"{plugin_name(production_root(REPO, arm()))}@inline": {
+                    "options": options
+                }
+            }
         flags += f" --settings {shlex.quote(json.dumps(settings))}"
         if options is not None:
             flags += f" --plugin-dir {REMOTE}/production"
@@ -240,7 +253,7 @@ class JevClaudeCode(ClaudeCode):
                 loaded_plugins = {plugin["name"] for plugin in event.get("plugins", [])}
         expected_plugins = {"jev-eval-observer"}
         if arm_options(arm()) is not None:
-            expected_plugins.add("fast-jev-output")
+            expected_plugins.add(plugin_name(production_root(REPO, arm())))
         if loaded_plugins != expected_plugins:
             raise RuntimeError(f"Unexpected loaded plugins: {loaded_plugins}")
         if not events:

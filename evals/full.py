@@ -21,9 +21,10 @@ from evals.sources import (
     arm_options,
     arms,
     control_arm,
+    plugin_name,
     plugin_options,
+    plugin_roots,
     production_provenance,
-    production_root,
 )
 from evals.summarize import read_events, summarize_trial
 
@@ -75,16 +76,17 @@ def save(path: Path, value: object) -> None:
 
 def source_hashes() -> dict[str, str]:
     hashes = {}
-    for root, directories in (
-        (REPO, ("evals",)),
-        (production_root(REPO), PRODUCTION),
-    ):
+    sources: list[tuple[Path, tuple[str, ...], str]] = [(REPO, ("evals",), "")]
+    for root in plugin_roots(REPO).values():
+        prefix = "" if root == REPO.resolve() else f"plugin/{plugin_name(root)}/"
+        sources.append((root, PRODUCTION, prefix))
+    for root, directories, prefix in sources:
         names = subprocess.check_output(
             ["git", "ls-files", *directories], cwd=root, text=True
         ).splitlines()
         hashes.update(
             {
-                name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                prefix + name: hashlib.sha256((root / name).read_bytes()).hexdigest()
                 for name in names
             }
         )
@@ -105,6 +107,8 @@ ACCOUNT_MARKERS = (
     "subscription limit",
     "insufficient_quota",
     "credit balance is too low",
+    "claude subscription status unavailable",
+    "expected official claude subscription login",
     '"status": 429',
     '"status": 401',
 )
@@ -168,6 +172,12 @@ def trial_blocker(job: Path) -> str | None:
         if category in {"agent_setup", "infrastructure"}:
             return f"{category} failure; inspect trial evidence"
     return None
+
+
+def setup_timeout(exception: dict | None) -> bool:
+    """A container that never reached the agent measures the sandbox, not the arm."""
+    message = str((exception or {}).get("exception_message", "")).lower()
+    return message.startswith("agent setup timed out")
 
 
 def setup_signature(exception: dict | None) -> tuple[str, str] | None:
@@ -435,7 +445,7 @@ def continuation_rows(
         raise ValueError("Cannot resume with different arms")
     if previous["flags"] != flags:
         raise ValueError("Cannot resume with different trial flags")
-    production = (".claude-plugin/", "hooks/", "src/")
+    production = (".claude-plugin/", "hooks/", "src/", "plugin/")
     if {
         key: value
         for key, value in previous["source_sha256"].items()
@@ -473,7 +483,10 @@ def continuation_rows(
                 row.update(summarize_trial(paths[0], row["arm"]))
                 row["failure_category"] = failure_category(row)
                 row["resummarized_with_sources"] = pin.get("evals/summarize.py")
-        if row["state"] == "finished" and row.get("failure_category") == "account":
+        if row["state"] == "finished" and (
+            row.get("failure_category") == "account"
+            or (setup_timeout(row.get("exception")) and not row.get("voided_attempts"))
+        ):
             rows[index] = row = void_attempt(root, row, item)
         if row["state"] not in {
             "pending",
