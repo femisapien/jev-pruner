@@ -91,6 +91,37 @@ def source_hashes() -> dict[str, str]:
     return hashes
 
 
+ACCOUNT_MARKERS = (
+    "rate_limit",
+    "rate limit",
+    "usage limit",
+    "hit your limit",
+    "authentication_error",
+    "invalid_api_key",
+    "not logged in",
+    "oauth token",
+    "oauth session",
+    "failed to authenticate",
+    "subscription limit",
+    "insufficient_quota",
+    "credit balance is too low",
+    '"status": 429',
+    '"status": 401',
+)
+
+
+def account_failure(exception: dict | None) -> bool:
+    """Rate-limit or authentication failures say nothing about the task or arm."""
+    exception = exception or {}
+    if not exception:
+        return False
+    kind = str(exception.get("exception_type", ""))
+    if kind in {"ApiRateLimitError", "AuthenticationError"}:
+        return True
+    message = str(exception.get("exception_message", "")).lower()
+    return any(marker in message for marker in ACCOUNT_MARKERS)
+
+
 def access_blocker(events: list[dict]) -> str | None:
     for event in events:
         if event.get("subtype") == "init" and event.get("model") != "claude-sonnet-5":
@@ -104,24 +135,7 @@ def access_blocker(events: list[dict]) -> str | None:
         if not (event.get("is_error") or error or event.get("type") == "error"):
             continue
         text = json.dumps(event).lower()
-        if any(
-            marker in text
-            for marker in (
-                "rate_limit",
-                "rate limit",
-                "usage limit",
-                "hit your limit",
-                "authentication_error",
-                "invalid_api_key",
-                "not logged in",
-                "oauth token",
-                "subscription limit",
-                "insufficient_quota",
-                "credit balance is too low",
-                '"status": 429',
-                '"status": 401',
-            )
-        ):
+        if any(marker in text for marker in ACCOUNT_MARKERS):
             return "Claude authentication or account limit error; inspect saved stream"
         if "model" in text and any(
             marker in text
@@ -156,6 +170,43 @@ def trial_blocker(job: Path) -> str | None:
     return None
 
 
+def setup_signature(exception: dict | None) -> tuple[str, str] | None:
+    exception = exception or {}
+    if not exception.get("exception_type"):
+        return None
+    message = str(exception.get("exception_message", "")).splitlines()
+    return exception["exception_type"], message[0] if message else ""
+
+
+def repeated_task_failure(rows: list[dict], row: dict, job: Path) -> bool:
+    """True when another arm of the same task already failed setup the same way.
+
+    A setup failure that reproduces across arms is a property of the task's
+    environment, not of the arm under test, so it is recorded and the cohort
+    continues instead of pausing once per arm.
+    """
+    signatures = set()
+    for result in job.glob("*/result.json"):
+        try:
+            signature = setup_signature(
+                json.loads(result.read_text()).get("exception_info")
+            )
+        except json.JSONDecodeError:
+            continue
+        if signature:
+            signatures.add(signature)
+    if not signatures:
+        return False
+    return any(
+        other is not row
+        and other["task"] == row["task"]
+        and other.get("state") == "finished"
+        and other.get("failure_category") in {"agent_setup", "infrastructure"}
+        and setup_signature(other.get("exception")) in signatures
+        for other in rows
+    )
+
+
 def failure_category(row: dict) -> str | None:
     exception = row.get("exception") or {}
     kind = exception.get("exception_type", "")
@@ -163,6 +214,8 @@ def failure_category(row: dict) -> str | None:
         return "infrastructure"
     if "Verifier" in kind or "Reward" in kind:
         return "verifier"
+    if account_failure(exception):
+        return "account"
     if "Setup" in kind or (
         exception
         and (row.get("agent_setup") or {}).get("started_at")
@@ -319,7 +372,7 @@ def finish_trial(root: Path, row: dict, environment: str) -> str | None:
     reason = trial_blocker(job)
     paths = list(job.glob("*/result.json"))
     if len(paths) == 1:
-        row.update(summarize_trial(paths[0]))
+        row.update(summarize_trial(paths[0], row["arm"]))
         row["failure_category"] = failure_category(row)
         row["state"] = "finished"
     else:
@@ -395,7 +448,7 @@ def continuation_rows(
         for row, item in zip(rows, manifest, strict=True)
     ):
         raise ValueError("Checkpoint does not match the declared manifest")
-    for row in rows:
+    for index, (row, item) in enumerate(zip(rows, manifest, strict=True)):
         if row["state"] == "running" and row["job_name"] in (inflight or set()):
             row.setdefault("execution_commit", previous["commit"])
             continue
@@ -409,7 +462,7 @@ def continuation_rows(
                 or len(paths) != 1
             ):
                 raise ValueError("Cannot resume an unfinished Harbor trial")
-            row.update(summarize_trial(paths[0]))
+            row.update(summarize_trial(paths[0], row["arm"]))
             row["failure_category"] = failure_category(row)
             row["harbor_return_code"] = None
             row["recovered_from_completed_harbor_job"] = True
@@ -417,9 +470,11 @@ def continuation_rows(
         elif row["state"] == "finished":
             paths = list((root / "jobs" / row["job_name"]).glob("*/result.json"))
             if len(paths) == 1:
-                row.update(summarize_trial(paths[0]))
+                row.update(summarize_trial(paths[0], row["arm"]))
                 row["failure_category"] = failure_category(row)
                 row["resummarized_with_sources"] = pin.get("evals/summarize.py")
+        if row["state"] == "finished" and row.get("failure_category") == "account":
+            rows[index] = row = void_attempt(root, row, item)
         if row["state"] not in {
             "pending",
             "finished",
@@ -434,6 +489,28 @@ def continuation_rows(
     }:
         raise ValueError("In-flight processes must match running checkpoint rows")
     return rows
+
+
+def void_attempt(root: Path, row: dict, item: dict) -> dict:
+    """Requeue a trial that failed on the account rather than the task.
+
+    The Harbor job directory is kept under a `.voided-N` suffix so the evidence
+    survives, and the attempt is recorded on the fresh pending row.
+    """
+    job = root / "jobs" / row["job_name"]
+    attempts = list(row.get("voided_attempts", []))
+    voided = job.with_name(f"{job.name}.voided-{len(attempts) + 1}")
+    if job.exists():
+        job.rename(voided)
+    attempts.append(
+        {
+            "job_dir": voided.name,
+            "failure_category": row.get("failure_category"),
+            "exception": row.get("exception"),
+            "execution_commit": row.get("execution_commit"),
+        }
+    )
+    return {**item, "state": "pending", "voided_attempts": attempts}
 
 
 def validate_manifest(
@@ -599,7 +676,11 @@ def run(
     while True:
         for index, process in list(active.items()):
             row = rows[index]
-            reason = trial_blocker(root / "jobs" / row["job_name"])
+            job = root / "jobs" / row["job_name"]
+            reason = trial_blocker(job)
+            if reason and repeated_task_failure(rows, row, job):
+                row["repeated_task_failure"] = reason
+                reason = None
             if reason:
                 pause(index, reason)
                 if process.poll() is None:
@@ -608,6 +689,9 @@ def run(
                 continue
             row["harbor_return_code"] = process.returncode
             final_reason = finish_trial(root, row, environment)
+            if final_reason and repeated_task_failure(rows, row, job):
+                row["repeated_task_failure"] = final_reason
+                final_reason = None
             reason = reason or final_reason
             checkpoint(root, rows)
             print(

@@ -8,6 +8,7 @@ from evals.full import (
     aggregate,
     failure_category,
     next_pending,
+    repeated_task_failure,
     trial_blocker,
     validate_manifest,
 )
@@ -116,6 +117,40 @@ class FullTests(unittest.TestCase):
                     else:
                         self.assertIsNotNone(reason)
                         self.assertIn(expected, reason or "")
+
+    def test_setup_failure_shared_across_arms_does_not_pause(self) -> None:
+        exception = {
+            "exception_type": "NonZeroAgentExitCodeError",
+            "exception_message": "Command failed (exit 100): apt-get install\nstdout: ...",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory)
+            (job / "trial").mkdir()
+            (job / "trial" / "result.json").write_text(
+                json.dumps({"exception_info": exception})
+            )
+            row = {"task": "qemu", "arm": "jev", "state": "running"}
+            earlier = {
+                "task": "qemu",
+                "arm": "control",
+                "state": "finished",
+                "failure_category": "agent_setup",
+                "exception": {
+                    **exception,
+                    "exception_message": "Command failed (exit 100): apt-get install\nstdout: other",
+                },
+            }
+            self.assertTrue(repeated_task_failure([earlier, row], row, job))
+            self.assertFalse(repeated_task_failure([row], row, job))
+            other_task = {**earlier, "task": "mailman"}
+            self.assertFalse(repeated_task_failure([other_task, row], row, job))
+            other_error = {
+                **earlier,
+                "exception": {"exception_type": "AgentSetupTimeoutError"},
+            }
+            self.assertFalse(repeated_task_failure([other_error, row], row, job))
+            solved = {**earlier, "failure_category": None, "exception": None}
+            self.assertFalse(repeated_task_failure([solved, row], row, job))
 
     def test_account_errors_stop_but_task_text_does_not(self) -> None:
         self.assertIsNone(
