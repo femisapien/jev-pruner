@@ -91,6 +91,37 @@ def source_hashes() -> dict[str, str]:
     return hashes
 
 
+ACCOUNT_MARKERS = (
+    "rate_limit",
+    "rate limit",
+    "usage limit",
+    "hit your limit",
+    "authentication_error",
+    "invalid_api_key",
+    "not logged in",
+    "oauth token",
+    "oauth session",
+    "failed to authenticate",
+    "subscription limit",
+    "insufficient_quota",
+    "credit balance is too low",
+    '"status": 429',
+    '"status": 401',
+)
+
+
+def account_failure(exception: dict | None) -> bool:
+    """Rate-limit or authentication failures say nothing about the task or arm."""
+    exception = exception or {}
+    if not exception:
+        return False
+    kind = str(exception.get("exception_type", ""))
+    if kind in {"ApiRateLimitError", "AuthenticationError"}:
+        return True
+    message = str(exception.get("exception_message", "")).lower()
+    return any(marker in message for marker in ACCOUNT_MARKERS)
+
+
 def access_blocker(events: list[dict]) -> str | None:
     for event in events:
         if event.get("subtype") == "init" and event.get("model") != "claude-sonnet-5":
@@ -104,24 +135,7 @@ def access_blocker(events: list[dict]) -> str | None:
         if not (event.get("is_error") or error or event.get("type") == "error"):
             continue
         text = json.dumps(event).lower()
-        if any(
-            marker in text
-            for marker in (
-                "rate_limit",
-                "rate limit",
-                "usage limit",
-                "hit your limit",
-                "authentication_error",
-                "invalid_api_key",
-                "not logged in",
-                "oauth token",
-                "subscription limit",
-                "insufficient_quota",
-                "credit balance is too low",
-                '"status": 429',
-                '"status": 401',
-            )
-        ):
+        if any(marker in text for marker in ACCOUNT_MARKERS):
             return "Claude authentication or account limit error; inspect saved stream"
         if "model" in text and any(
             marker in text
@@ -200,6 +214,8 @@ def failure_category(row: dict) -> str | None:
         return "infrastructure"
     if "Verifier" in kind or "Reward" in kind:
         return "verifier"
+    if account_failure(exception):
+        return "account"
     if "Setup" in kind or (
         exception
         and (row.get("agent_setup") or {}).get("started_at")
@@ -432,7 +448,7 @@ def continuation_rows(
         for row, item in zip(rows, manifest, strict=True)
     ):
         raise ValueError("Checkpoint does not match the declared manifest")
-    for row in rows:
+    for index, (row, item) in enumerate(zip(rows, manifest, strict=True)):
         if row["state"] == "running" and row["job_name"] in (inflight or set()):
             row.setdefault("execution_commit", previous["commit"])
             continue
@@ -457,6 +473,8 @@ def continuation_rows(
                 row.update(summarize_trial(paths[0], row["arm"]))
                 row["failure_category"] = failure_category(row)
                 row["resummarized_with_sources"] = pin.get("evals/summarize.py")
+        if row["state"] == "finished" and row.get("failure_category") == "account":
+            rows[index] = row = void_attempt(root, row, item)
         if row["state"] not in {
             "pending",
             "finished",
@@ -471,6 +489,28 @@ def continuation_rows(
     }:
         raise ValueError("In-flight processes must match running checkpoint rows")
     return rows
+
+
+def void_attempt(root: Path, row: dict, item: dict) -> dict:
+    """Requeue a trial that failed on the account rather than the task.
+
+    The Harbor job directory is kept under a `.voided-N` suffix so the evidence
+    survives, and the attempt is recorded on the fresh pending row.
+    """
+    job = root / "jobs" / row["job_name"]
+    attempts = list(row.get("voided_attempts", []))
+    voided = job.with_name(f"{job.name}.voided-{len(attempts) + 1}")
+    if job.exists():
+        job.rename(voided)
+    attempts.append(
+        {
+            "job_dir": voided.name,
+            "failure_category": row.get("failure_category"),
+            "exception": row.get("exception"),
+            "execution_commit": row.get("execution_commit"),
+        }
+    )
+    return {**item, "state": "pending", "voided_attempts": attempts}
 
 
 def validate_manifest(

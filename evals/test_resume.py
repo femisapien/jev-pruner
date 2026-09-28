@@ -90,3 +90,27 @@ class ContinuationTests(unittest.TestCase):
         self.assertTrue(rows[0]["recovered_from_completed_harbor_job"])
         self.assertIsNone(rows[0]["harbor_return_code"])
         self.assertEqual(rows[1]["state"], "pending")
+
+    def test_account_failures_are_voided_and_requeued(self) -> None:
+        exception = {
+            "exception_type": "ApiRateLimitError",
+            "exception_message": "Failed to authenticate: OAuth session expired",
+        }
+        self.rows[0].update(
+            reward=None, failure_category="account", exception=exception
+        )
+        self.write("progress.json", self.rows)
+        job = self.root / "jobs" / "control"
+        (job / "trial").mkdir(parents=True)
+        (job / "trial" / "result.json").write_text(
+            json.dumps({"finished_at": "t", "exception_info": exception})
+        )
+        with patch("evals.full.summarize_trial") as summarize:
+            summarize.return_value = {"reward": None, "exception": exception}
+            rows = continuation_rows(self.root, self.manifest, self.flags, self.pin)
+        self.assertEqual(rows[0]["state"], "pending")
+        self.assertNotIn("reward", rows[0])
+        self.assertEqual(rows[0]["voided_attempts"][0]["job_dir"], "control.voided-1")
+        self.assertEqual(rows[0]["voided_attempts"][0]["failure_category"], "account")
+        self.assertFalse(job.exists())
+        self.assertTrue((self.root / "jobs" / "control.voided-1").exists())
