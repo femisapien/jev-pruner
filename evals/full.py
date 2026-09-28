@@ -156,6 +156,43 @@ def trial_blocker(job: Path) -> str | None:
     return None
 
 
+def setup_signature(exception: dict | None) -> tuple[str, str] | None:
+    exception = exception or {}
+    if not exception.get("exception_type"):
+        return None
+    message = str(exception.get("exception_message", "")).splitlines()
+    return exception["exception_type"], message[0] if message else ""
+
+
+def repeated_task_failure(rows: list[dict], row: dict, job: Path) -> bool:
+    """True when another arm of the same task already failed setup the same way.
+
+    A setup failure that reproduces across arms is a property of the task's
+    environment, not of the arm under test, so it is recorded and the cohort
+    continues instead of pausing once per arm.
+    """
+    signatures = set()
+    for result in job.glob("*/result.json"):
+        try:
+            signature = setup_signature(
+                json.loads(result.read_text()).get("exception_info")
+            )
+        except json.JSONDecodeError:
+            continue
+        if signature:
+            signatures.add(signature)
+    if not signatures:
+        return False
+    return any(
+        other is not row
+        and other["task"] == row["task"]
+        and other.get("state") == "finished"
+        and other.get("failure_category") in {"agent_setup", "infrastructure"}
+        and setup_signature(other.get("exception")) in signatures
+        for other in rows
+    )
+
+
 def failure_category(row: dict) -> str | None:
     exception = row.get("exception") or {}
     kind = exception.get("exception_type", "")
@@ -599,7 +636,11 @@ def run(
     while True:
         for index, process in list(active.items()):
             row = rows[index]
-            reason = trial_blocker(root / "jobs" / row["job_name"])
+            job = root / "jobs" / row["job_name"]
+            reason = trial_blocker(job)
+            if reason and repeated_task_failure(rows, row, job):
+                row["repeated_task_failure"] = reason
+                reason = None
             if reason:
                 pause(index, reason)
                 if process.poll() is None:
@@ -608,6 +649,9 @@ def run(
                 continue
             row["harbor_return_code"] = process.returncode
             final_reason = finish_trial(root, row, environment)
+            if final_reason and repeated_task_failure(rows, row, job):
+                row["repeated_task_failure"] = final_reason
+                final_reason = None
             reason = reason or final_reason
             checkpoint(root, rows)
             print(
