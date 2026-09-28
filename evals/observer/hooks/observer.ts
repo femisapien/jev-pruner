@@ -33,7 +33,7 @@ export const register: Register = (on) => {
   });
   on('fs.write', async ($, event, next) => {
     const answer = await next(event);
-    const filename = event.path.match(/(?:^|\/)\.claude\/fast-jev-output\/(bash-[^/]+\.txt)$/)?.[1];
+    const filename = event.path.match(/(?:^|\/)\.claude\/(?:fast-jev-output|pruner-output)\/(bash-[^/]+\.txt)$/)?.[1];
     if (filename) await $.fs.write(`${root}/archives/${filename}`, event.text);
     return answer;
   });

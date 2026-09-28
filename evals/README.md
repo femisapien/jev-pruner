@@ -44,7 +44,14 @@ plugin options above and passed through `pluginConfigs`; `env` entries whose
 value starts with `$` are read from the launcher environment and exported into
 the agent container. `evals/arms/pruner-cohort.json` declares Jev plus the
 independent `pruner-model` checkpoints served at their Jev-compatible
-`baseUrl`, each authenticated with `PRUNER_SERVE_TOKEN`. Manifests must then
+`baseUrl`, each authenticated with `PRUNER_SERVE_TOKEN`. An arm may also name a
+`plugin` checkout (absolute path holding `.claude-plugin`, `hooks` and `src`) to
+run a different Claude Code plugin than this repository's hook; its manifest
+name is used for `pluginConfigs`, the expected init plugin list, and the
+`plugin/<name>/` prefix of its pinned source hashes, and its commit is recorded
+under `production_checkouts`. `evals/arms/pruner-standalone.json` runs
+`pruner-model`'s own per-line `pruner-output` hook (no token floor) this way,
+with `PRUNER_MODEL_PLUGIN_DIR` pointing at `pruner-model/plugin`. Manifests must then
 contain one trial per arm for each task repetition; `results.json` pairs every
 non-control arm with the control and records the arm declaration.
 

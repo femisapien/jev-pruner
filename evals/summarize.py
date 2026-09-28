@@ -8,16 +8,19 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from statistics import median
 
-from evals.sources import arm_options, control_arm
+from evals.sources import arm_options, control_arm, plugin_name, production_root
+
+REPO = Path(__file__).resolve().parents[1]
 
 TRIM_LOG = re.compile(r"kept (\d+)/(\d+) chunks \((\d+)→(\d+) chars\)")
-TRIM_MARKER = re.compile(r"\[fast-jev-output trimmed (\d+) lines \((\d+) chars\)")
+PLUGINS = r"(?:fast-jev-output|pruner-output)"
+TRIM_MARKER = re.compile(rf"\[{PLUGINS} trimmed (\d+) lines \((\d+) chars\)")
 PRUNED_OUTPUT = re.compile(
-    r"\[fast-jev-output (?:trimmed(?: \d+ (?:more )?lines|;)|cut this section to fit)"
+    rf"\[{PLUGINS} (?:trimmed(?: \d+ (?:more )?lines|;)|cut this section to fit)"
 )
-DECISION_PREFIX = "fast-jev-output decision "
+DECISION_PREFIX = re.compile(rf"^{PLUGINS} decision ")
 ARCHIVE_FOOTER = re.compile(
-    r"\[fast-jev-output (?:trimmed \d+ lines \(\d+ chars\); )?"
+    rf"\[{PLUGINS} (?:trimmed \d+ lines \(\d+ chars\); )?"
     r"full output: ([^\n]+) \(Read or grep it if needed\)\]"
 )
 
@@ -87,10 +90,11 @@ def summarize_decisions(events: list[dict], logs: list[str], bash: list[dict]) -
     decisions = []
     malformed = 0
     for text in logs:
-        if not text.startswith(DECISION_PREFIX):
+        prefix = DECISION_PREFIX.match(text)
+        if not prefix:
             continue
         try:
-            decision = json.loads(text[len(DECISION_PREFIX) :])
+            decision = json.loads(text[prefix.end() :])
             if (
                 not isinstance(decision, dict)
                 or decision.get("version") != 1
@@ -219,7 +223,11 @@ def summarize_agent(agent: Path, arm: str, stream: str = "claude-code.txt") -> d
     plugins = sorted(p["name"] for p in init.get("plugins", []))
     expected = sorted(
         ["jev-eval-observer"]
-        + (["fast-jev-output"] if arm_options(arm) is not None else [])
+        + (
+            [plugin_name(production_root(REPO, arm))]
+            if arm_options(arm) is not None
+            else []
+        )
     )
     issues = []
     if plugins != expected:
