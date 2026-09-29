@@ -70,6 +70,20 @@ def arm_options(name: str) -> dict | None:
     return {**plugin_options(), **value.get("options", {})}
 
 
+def shared_env() -> dict[str, str]:
+    """Container environment applied to every arm, control included.
+
+    ``JEV_EVAL_BASH_MAX_OUTPUT_LENGTH`` raises Claude Code's Bash read-back cap
+    (default 30000 chars, maximum 150000) so large tool outputs reach the model.
+    """
+    value = os.environ.get("JEV_EVAL_BASH_MAX_OUTPUT_LENGTH")
+    if value is None:
+        return {}
+    if not value.isdigit() or not 1 <= int(value) <= 150000:
+        raise ValueError("JEV_EVAL_BASH_MAX_OUTPUT_LENGTH must be 1..150000")
+    return {"BASH_MAX_OUTPUT_LENGTH": value}
+
+
 def arm_env(name: str) -> dict[str, str]:
     """Container environment overrides; ``$NAME`` values are read from the launcher env."""
     value = arms()[name] or {}
