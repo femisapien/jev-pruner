@@ -14,6 +14,7 @@ from evals.sources import (
     plugin_roots,
     production_provenance,
     production_root,
+    shared_env,
 )
 
 
@@ -118,3 +119,17 @@ class SourceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedEnvTests(unittest.TestCase):
+    def test_bash_cap_applies_to_every_arm_and_is_bounded(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(shared_env(), {})
+        with patch.dict(os.environ, {"JEV_EVAL_BASH_MAX_OUTPUT_LENGTH": "150000"}):
+            self.assertEqual(shared_env(), {"BASH_MAX_OUTPUT_LENGTH": "150000"})
+        for value in ("0", "150001", "30k"):
+            with (
+                patch.dict(os.environ, {"JEV_EVAL_BASH_MAX_OUTPUT_LENGTH": value}),
+                self.assertRaises(ValueError),
+            ):
+                shared_env()

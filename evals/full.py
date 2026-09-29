@@ -25,15 +25,17 @@ from evals.sources import (
     plugin_options,
     plugin_roots,
     production_provenance,
+    shared_env,
 )
 from evals.summarize import read_events, summarize_trial
 
 REPO = Path(__file__).resolve().parents[1]
 REGISTRY = "https://raw.githubusercontent.com/laude-institute/harbor/b83e7686999a18ba90a8603794d7d18d42cab010/registry.json"
 MODEL = "anthropic/claude-sonnet-5"
+DATASET = "terminal-bench@2.0"
 FLAGS = [
     "-d",
-    "terminal-bench@2.0",
+    DATASET,
     "--registry-url",
     REGISTRY,
     "-a",
@@ -390,7 +392,7 @@ def finish_trial(root: Path, row: dict, environment: str) -> str | None:
         row["failure_category"] = "infrastructure"
         row["error"] = f"Expected one trial result, found {len(paths)}"
         reason = reason or row["error"]
-    if environment == "docker":
+    if environment == "docker" and row.get("requested_docker_image"):
         inspected = subprocess.run(
             [
                 "docker",
@@ -406,10 +408,7 @@ def finish_trial(root: Path, row: dict, environment: str) -> str | None:
         )
         if inspected.returncode == 0:
             row["image_repo_digests"] = json.loads(inspected.stdout)
-    if row.get("task_revision") not in {
-        None,
-        "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
-    }:
+    if row.get("task_revision") not in {None, row.get("git_commit_id")}:
         reason = "Unexpected benchmark revision in trial result"
     issues = row.get("measurement_issues") or []
     if row.get("model") and any(
@@ -439,6 +438,8 @@ def continuation_rows(
     previous = json.loads((root / "execution-provenance.json").read_text())
     if previous.get("plugin_options", {}) != plugin_options():
         raise ValueError("Cannot resume with different plugin options")
+    if previous.get("shared_env", {}) != shared_env():
+        raise ValueError("Cannot resume with a different shared container environment")
     if previous.get("arms", DEFAULT_ARMS) != {
         name: arm_options(name) for name in arm_names()
     }:
@@ -562,9 +563,11 @@ def run(
     inflight: dict[str, TrialProcess] | None = None,
     task_count: int = 89,
     repetitions: int = 1,
+    dataset: str = DATASET,
 ) -> None:
     if concurrency < 1:
         raise ValueError("Concurrency must be positive")
+    flags = [dataset if flag == DATASET else flag for flag in FLAGS]
     if inflight and not resume:
         raise ValueError("In-flight processes require resume")
     if os.environ.get("JEV_EVAL_AUTH_MODE") != "subscription":
@@ -598,7 +601,7 @@ def run(
     pin = source_hashes()
     rows = (
         continuation_rows(
-            root, manifest, FLAGS + environment_flags, pin, set(inflight or {})
+            root, manifest, flags + environment_flags, pin, set(inflight or {})
         )
         if resume
         else [
@@ -616,13 +619,14 @@ def run(
             ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
         ).strip(),
         "source_sha256": pin,
-        "flags": FLAGS + environment_flags,
+        "flags": flags + environment_flags,
         "environment": environment,
         "modal_image_builder_version": (
             env["MODAL_IMAGE_BUILDER_VERSION"] if environment == "modal" else None
         ),
         "auth_mode": "subscription",
         "plugin_options": plugin_options(),
+        "shared_env": shared_env(),
         "arms": {name: arm_options(name) for name in arm_names()},
         "control_arm": control_arm(),
         "api_overrides_present_in_launcher": sorted(set(AUTH_OVERRIDES) & set(env)),
@@ -729,11 +733,13 @@ def run(
             task_config = tomllib.loads(
                 (benchmark / row["task"] / "task.toml").read_text()
             )
-            row["requested_docker_image"] = task_config["environment"]["docker_image"]
+            row["requested_docker_image"] = task_config["environment"].get(
+                "docker_image"
+            )
             command = [
                 harbor,
                 "run",
-                *FLAGS,
+                *flags,
                 "-i",
                 row["task"],
                 "--job-name",
@@ -783,6 +789,7 @@ if __name__ == "__main__":
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--task-count", type=int, default=89)
     parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument("--dataset", default=DATASET)
     args = parser.parse_args()
     run(
         args.evidence.resolve(),
@@ -793,4 +800,5 @@ if __name__ == "__main__":
         args.concurrency,
         task_count=args.task_count,
         repetitions=args.repetitions,
+        dataset=args.dataset,
     )

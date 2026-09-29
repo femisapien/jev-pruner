@@ -25,6 +25,7 @@ from evals.sources import (
     arms,
     plugin_name,
     production_root,
+    shared_env,
 )
 
 CLAUDE_VERSION = "2.1.274"
@@ -184,6 +185,7 @@ class JevClaudeCode(ClaudeCode):
         env = {} if auth_mode() == "subscription" else super()._resolve_auth_env()
         env["CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"] = "1"
         env["TYPESAFE_API_KEY"] = os.environ["TYPESAFE_API_KEY"]
+        env.update(shared_env())
         env.update(arm_env(arm()))
         return env
 
