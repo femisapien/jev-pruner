@@ -14,14 +14,18 @@ REPO = Path(__file__).resolve().parents[1]
 
 TRIM_LOG = re.compile(r"kept (\d+)/(\d+) chunks \((\d+)→(\d+) chars\)")
 PLUGINS = r"(?:fast-jev-output|pruner-output)"
-TRIM_MARKER = re.compile(rf"\[{PLUGINS} trimmed (\d+) lines \((\d+) chars\)")
+TRIM_MARKER = re.compile(
+    rf"\[{PLUGINS} trimmed (\d+) lines \((\d+) chars\)|\[…(\d+) lines\]"
+)
 PRUNED_OUTPUT = re.compile(
     rf"\[{PLUGINS} (?:trimmed(?: \d+ (?:more )?lines|;)|cut this section to fit)"
+    rf"|\[…\d+ lines\]|\[{PLUGINS}: (?:\d+ lines omitted|cut to fit)"
 )
 DECISION_PREFIX = re.compile(rf"^{PLUGINS} decision ")
 ARCHIVE_FOOTER = re.compile(
     rf"\[{PLUGINS} (?:trimmed \d+ lines \(\d+ chars\); )?"
     r"full output: ([^\n]+) \(Read or grep it if needed\)\]"
+    rf"|\[{PLUGINS}: \d+ lines omitted; full output: ([^\n\]]+)\]"
 )
 
 
@@ -29,7 +33,7 @@ def native_archive_exists(agent: Path, content: str) -> bool:
     matches = list(ARCHIVE_FOOTER.finditer(content))
     if not matches:
         return False
-    remote = PurePosixPath(matches[-1][1])
+    remote = PurePosixPath(matches[-1][1] or matches[-1][2])
     base = (agent / "sessions/projects").resolve()
     if not base.is_relative_to(agent.resolve()):
         return False
@@ -136,7 +140,9 @@ def summarize_decisions(events: list[dict], logs: list[str], bash: list[dict]) -
                 result_order[block["tool_use_id"]] = event_index
                 last_explanation = ""
     archives = {
-        match[1] for text in results.values() for match in ARCHIVE_FOOTER.finditer(text)
+        match[1] or match[2]
+        for text in results.values()
+        for match in ARCHIVE_FOOTER.finditer(text)
     }
     for record in bash:
         output = record.get("answer", {}).get("result")
@@ -370,8 +376,8 @@ def summarize_agent(agent: Path, arm: str, stream: str = "claude-code.txt") -> d
         "chars_before_pruned_outputs": sum(int(m[3]) for m in trims),
         "chars_after_pruned_outputs": sum(int(m[4]) for m in trims),
         "net_chars_saved": sum(int(m[3]) - int(m[4]) for m in trims),
-        "raw_chars_removed": sum(int(m[2]) for m in markers),
-        "lines_removed": sum(int(m[1]) for m in markers),
+        "raw_chars_removed": sum(int(m[2]) for m in markers if m[2]),
+        "lines_removed": sum(int(m[1] or m[3]) for m in markers),
     }
 
 

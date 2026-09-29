@@ -3,7 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evals.summarize import summarize_agent, summarize_decisions, summarize_trial
+from evals.summarize import (
+    ARCHIVE_FOOTER,
+    PRUNED_OUTPUT,
+    TRIM_MARKER,
+    summarize_agent,
+    summarize_decisions,
+    summarize_trial,
+)
 
 
 class SummaryTests(unittest.TestCase):
@@ -250,3 +257,20 @@ class SummaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompactPrunerOutputMarkers(unittest.TestCase):
+    def test_compact_markers_and_footer_are_recognised(self) -> None:
+        text = (
+            "error: boom\n[…2 lines]\ndone\n[…1 lines]\n"
+            "[pruner-output: 3 lines omitted; full output: .claude/pruner-output/bash-1.txt]"
+        )
+        self.assertTrue(PRUNED_OUTPUT.search(text))
+        markers = list(TRIM_MARKER.finditer(text))
+        self.assertEqual([int(m[1] or m[3]) for m in markers], [2, 1])
+        footer = ARCHIVE_FOOTER.search(text)
+        assert footer is not None
+        self.assertEqual(footer[1] or footer[2], ".claude/pruner-output/bash-1.txt")
+        legacy = "[fast-jev-output trimmed 3 lines (36 chars); full output: /a/b.txt (Read or grep it if needed)]"
+        self.assertEqual(ARCHIVE_FOOTER.search(legacy)[1], "/a/b.txt")
+        self.assertFalse(PRUNED_OUTPUT.search("plain output\nno markers"))
