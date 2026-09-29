@@ -57,11 +57,15 @@ def build(
     ).strip()
     if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"]):
         raise ValueError("Task checkout must be clean")
+    prefix = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "--show-prefix"], text=True
+    ).strip()
     rows = []
     for repetition in range(1, repetitions + 1):
         for index, task in enumerate(tasks):
             tree = subprocess.check_output(
-                ["git", "-C", str(source), "rev-parse", f"{head}:{task}"], text=True
+                ["git", "-C", str(source), "rev-parse", f"{head}:{prefix}{task}"],
+                text=True,
             ).strip()
             start = (index + repetition - 1) % len(names)
             for arm in names[start:] + names[:start]:
