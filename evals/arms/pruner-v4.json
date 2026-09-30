@@ -3,7 +3,7 @@
   "pruner-v4": {
     "plugin": "$PRUNER_MODEL_PLUGIN_DIR",
     "options": {
-      "baseUrl": "https://vrl-inc--pruner-model-jevcompatiblescorer-web.modal.run/v1/systemone",
+      "baseUrl": "https://twerk--pruner-model-jevcompatiblescorer-web.modal.run/v1/systemone",
       "model": "stage-c-v4-001-e3",
       "diagnostics": true
     },
